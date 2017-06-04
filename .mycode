@@ -1,0 +1,225 @@
+#include<stdio.h>
+#define BITS 12                  /* Встановлення довжини 12, 13   */
+#define HASHING_SHIFT BITS-8     /* або 14 бітам.                        */
+#define MAX_VALUE (1 << BITS) - 1/* Відмітимо що на машині MS-DOS при    */
+#define MAX_CODE MAX_VALUE - 1   /* довжині коду 14біт необхідно компілювати використовуючи large модель.    */
+#if BITS == 14
+  #define TABLE_SIZE 18041       /* Розмір таблиці строк повинен бути     */
+#endif                           /* простим числом,декілька більшим   */
+#if BITS == 13                   /* ніж 2**BITS.                         */
+  #define TABLE_SIZE 9029
+#endif
+#if BITS <= 12
+  #define TABLE_SIZE 5021
+#endif
+
+void *malloc();
+/* Це масив для значень кодів            */
+int *code_value;                 
+/* цей масив вміщає префікси кодів      */
+unsigned int *prefix_code;       
+/* цей масив вміщає додаткові символи  */
+unsigned char *append_character; 
+/* цей масив вміщає декодовані рядки */
+unsigned char decode_stack[4000];
+
+main  (int argc, char * argv[])
+
+{
+FILE *input_file;
+FILE *output_file;
+FILE *lzw_file;
+char input_file_name[81];
+/*
+**  Ці три буфера необхідні на стадії упаковки
+*/
+code_value=malloc(TABLE_SIZE*sizeof(unsigned int));
+prefix_code=malloc(TABLE_SIZE*sizeof(unsigned int));
+append_character=malloc(TABLE_SIZE*sizeof(unsigned char));
+if (code_value==NULL || prefix_code==NULL || append_character==NULL)
+ {
+printf("Fatal error allocating table space!\n");
+exit();
+ }
+
+/*
+** Получити назву файлу,відкрити його і відкрити вихідний lzw файл.
+*/
+if (argc>1)
+strcpy(input_file_name,argv[1]);
+else
+    {
+printf("Input file name? ");
+scanf("%s",input_file_name);
+    }
+input_file=fopen(input_file_name,"rb");
+lzw_file=fopen("test.lzw","wb");
+if (input_file==NULL || lzw_file==NULL)
+    {
+printf("Fatal error opening files.\n");
+exit();
+    };
+/*
+** Стисення файлу.
+*/
+compress(input_file,lzw_file);
+fclose(input_file);
+fclose(lzw_file);
+free(code_value);
+/*
+** Зараз відкрити файли для розпаковки
+*/
+lzw_file=fopen("test.lzw","rb");
+output_file=fopen("test.out","wb");
+if (lzw_file==NULL || output_file==NULL)
+    {
+printf("Fatal error opening files.\n");
+exit();
+    };
+/*
+** Розпаковка файлу
+*/
+expand(lzw_file,output_file);
+fclose(lzw_file);
+fclose(output_file);
+free(prefix_code);
+free(append_character);
+}
+
+/*
+** Процедура стиснення
+*/
+compress(FILE *input,FILE *output)
+{
+unsignedintnext_code;
+unsignedint character;
+unsignedintstring_code;
+unsignedint index;
+int i;
+next_code=256;    /* Next_code наступний доступний код рядка */
+for (i=0;i<TABLE_SIZE;i++)/*Очистка таблиці рядків перед стартом */
+code_value[i]=-1;
+    i=0;
+printf("Compressing...\n");
+string_code=getc(input);   /* Get the first code*/
+
+/*
+** Основний цикл. Він виконується до тих пір допоки можливе читання
+** вхідного потоку.  Відмітимо що він зупиняє читання таблиці
+** рядків після того, як всі можливі коди були використанні.
+*/
+while ((character=getc(input)) != (unsigned)EOF)
+{
+if (++i==1000)            /* Друкує * через кожні 1000  */
+{                         /* читань  вхідних символів (для */
+i=0;                  /* заспокоєння глядача).       */
+printf("*");
+        }
+		/* Дивимось, чи є рядок */
+index=find_match(string_code,character);
+if (code_value[index] != -1)      /* в таблиці.  Якщо є,*/
+printf("Expanding...\n");
+
+old_code=input_code(input);/*Читається перший код, ініціалізація*/
+character=old_code;   /* змінна character і посилається перший */
+putc(old_code,output);      /* код в вихідний файл.      */
+/*
+**  Основий цикл розпаковки.  Читаються коди з LZW-файла доти,
+**  доки не зустрінеться спеціальний код, вказуючий на кінець данних.
+*/
+while ((new_code=input_code(input)) != (MAX_VALUE))
+    {
+if (++counter==1000) { counter=0; printf("*"); }
+/*
+** Перевірка коду для спеціального випадку
+** STRING+CHARACTER+STRING+CHARACTER+
+** STRING, коли генерується невідомий код
+** Це заставляє декодувати останній код, 
+** добавив CHARACTER в кінець декод рядку.
+*/
+if (new_code>=next_code)
+        {
+            *decode_stack=character;
+string=decode_string(decode_stack+1,old_code);
+        }
+/*
+** Декодується новий код.
+*/
+else
+string=decode_string(decode_stack,new_code);
+/*
+** Виводиться декодує мий рядок в зворотньому порядку.
+*/
+character=*string;
+while (string >= decode_stack)
+putc(*string--,output);
+/*
+** Накінець, якщо можливо, добавляється новий код в таблицю рядків.
+*/
+if (next_code<= MAX_CODE)
+        {
+prefix_code[next_code]=old_code;
+append_character[next_code]=character;
+next_code++;
+        }
+old_code=new_code;
+}
+printf("\n");
+}
+
+/*
+** Процедура простого декодування рядка з таблиці рядків,
+* зберігаюча
+** результат в буфер.  Цей буфер може бути виведений
+** в зворотньому порядку розпаковки.
+*/
+char *decode_string(unsigned char *buffer,unsignedint code)
+{
+int i;
+
+    i=0;
+while (code > 255)
+    {
+        *buffer++ = append_character[code];
+code=prefix_code[code];
+if (i++>=4094)
+        {
+printf("Fatal error during code expansion.\n");
+exit();
+        }
+    }
+    *buffer=code;
+return(buffer);
+}
+/*
+** Наступні дві процедури керують вводом/виводом кодів
+** змінної довжини.  Вони для ясності написані дуже  
+** просто і не дуже ефективні.
+*/
+input_code(FILE *input)
+{
+unsignedintreturn_value;
+staticintinput_bit_count=0;
+static unsigned long input_bit_buffer=0L;
+while (input_bit_count<= 24)
+    {
+input_bit_buffer|=(unsigned long)getc(input)<<(24-input_bit_count);
+input_bit_count += 8;
+    }
+return_value=input_bit_buffer>> (32-BITS);
+input_bit_buffer<<= BITS;
+input_bit_count -= BITS;
+return(return_value);
+}
+output_code(FILE *output,unsignedint code)
+{
+staticintoutput_bit_count=0;
+static unsigned long output_bit_buffer=0L;
+output_bit_buffer|=(unsigned long)code<<(32-BITS-output_bit_count);
+output_bit_count += BITS;
+while (output_bit_count>= 8)
+    {
+putc(output_bit_buffer>> 24,output);
+output_bit_buffer<<= 8;
+output_bit_count -= 8;
+}
